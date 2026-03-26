@@ -4,71 +4,85 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
 app.use(express.json()); 
-app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST'],
-}));
+app.use(cors({ origin: '*', methods: ['GET', 'POST'] }));
 
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const uri = process.env.MONGO_URI;
 
 const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  }
+  serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
 });
 
 async function run() {
   try {
     const predictionDB = client.db("prediction");
-    const predictionLogic = predictionDB.collection("prediction-logic");
+    const predictionCollection = predictionDB.collection("prediction-logic");
 
-app.get('/prediction', async (req, res) => {
+    console.log("Connected to prediction-logic collection!");
+
+ app.get('/prediction', async (req, res) => {
   try {
-    const history = await predictionLogic.find().sort({ _id: -1 }).limit(10).toArray();
-    
-    const randomIndex = Math.floor(Math.random() * 100);
-    const selected = predictionData[randomIndex]; // 00-99 array
+    // 1. Database theke random 1-ti pattern neya
+    const randomDocs = await predictionCollection.aggregate([
+      { $sample: { size: 1 } }
+    ]).toArray();
 
+    if (!randomDocs || randomDocs.length === 0) {
+      return res.status(404).json({ error: "Data not found in DB!" });
+    }
+
+    const selected = randomDocs[0];
+
+    // 2. Sudhu history documents gulo fetch kora
+    const history = await predictionCollection.find({ isHistory: true })
+      .sort({ timestamp: -1 })
+      .limit(10)
+      .toArray();
+
+    // 3. Response map kora (Tomar DB-r 'size' field onujayi)
     const response = {
+      prediction: (selected.size || "Small").toUpperCase(), // "Small" -> "SMALL"
       period: new Date().getTime().toString().slice(-8),
-      prediction: selected.type, // BIG or SMALL
       confidence: Math.floor(Math.random() * (98 - 82 + 1) + 82),
-      resultNumber: selected.value, // Added this to root for easier mapping
+      resultNumber: selected.number !== undefined ? selected.number : "0",
+      color: selected.color || "Green",
+      // History mapping fix: prediction na thakle size theke charAt nibo
       lastUpdates: history.length > 0 
-        ? history.map(h => `${h.resultNumber}${h.prediction.charAt(0)}`) 
-        : ["07B", "02S", "09B", "01S", "06B"]
+        ? history.map(h => `${h.resultNumber}${ (h.prediction || h.size || "S").charAt(0).toUpperCase() }`) 
+        : ["1S", "9B", "0S", "5B", "3S"]
     };
-    await predictionLogic.insertOne({
+
+    // 4. History save kora (isHistory: true diye mark kora)
+    await predictionCollection.insertOne({
         period: response.period,
         prediction: response.prediction,
         confidence: response.confidence,
-        resultNumber: response.resultNumber, // Must match history.map
-        timestamp: new Date()
-    });
-    res.json(response);
-  } catch (error) {
-    res.status(500).json({ error: "Sync Failed" });
-  }
-});
-    app.get('/', (req, res) => {
-      res.send("Server is running perfectly!");
+        resultNumber: response.resultNumber, 
+        size: response.prediction, // Compatibility-r jonno
+        timestamp: new Date(),
+        isHistory: true 
     });
 
-    console.log("MongoDB Connected!");
+    res.json(response);
+
   } catch (error) {
-    console.error(error);
+    console.error("Backend Error:", error.message);
+    res.status(500).json({ error: "Sync Failed", details: error.message });
+  }
+});
+
+    app.get('/', (req, res) => res.send("RS ALGO Server Running..."));
+
+  } catch (error) {
+    console.error("Startup Error:", error);
   }
 }
+
 run().catch(console.dir);
 
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(port, () => console.log(`Server on ${port}`));
+}
 
-// Vercel-er jonno export kora dorkar
 module.exports = app;
