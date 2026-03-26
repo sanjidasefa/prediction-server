@@ -23,43 +23,52 @@ async function run() {
 
  app.get('/prediction', async (req, res) => {
   try {
-    // 1. Database theke random 1-ti pattern neya
+    // 1. Database theke random data fetch kora
     const randomDocs = await predictionCollection.aggregate([
       { $sample: { size: 1 } }
     ]).toArray();
 
+    // Data check: Jodi database khali thake
     if (!randomDocs || randomDocs.length === 0) {
-      return res.status(404).json({ error: "Data not found in DB!" });
+      console.error("Database is empty!");
+      return res.status(404).json({ error: "No data in prediction-logic collection" });
     }
 
     const selected = randomDocs[0];
 
-    // 2. Sudhu history documents gulo fetch kora
+    // 2. History fetch (Last 10 updates)
     const history = await predictionCollection.find({ isHistory: true })
       .sort({ timestamp: -1 })
       .limit(10)
       .toArray();
 
-    // 3. Response map kora (Tomar DB-r 'size' field onujayi)
+    // 3. Response Structure (Strictly based on your data)
+    // selected.number jodi integer hoy tobe eita string-e convert hobe
+    const resultNum = selected.number !== undefined ? selected.number.toString().padStart(2, '0') : "00";
+    const resultSize = (selected.size || "Small").toUpperCase();
+
     const response = {
-      prediction: (selected.size || "Small").toUpperCase(), // "Small" -> "SMALL"
+      prediction: resultSize, 
       period: new Date().getTime().toString().slice(-8),
       confidence: Math.floor(Math.random() * (98 - 82 + 1) + 82),
-      resultNumber: selected.number !== undefined ? selected.number : "0",
+      resultNumber: resultNum,
       color: selected.color || "Green",
-      // History mapping fix: prediction na thakle size theke charAt nibo
+      // History mapping fix: safely handle possible undefined values
       lastUpdates: history.length > 0 
-        ? history.map(h => `${h.resultNumber}${ (h.prediction || h.size || "S").charAt(0).toUpperCase() }`) 
+        ? history.map(h => {
+            const num = h.resultNumber || "0";
+            const pred = (h.prediction || h.size || "S").charAt(0).toUpperCase();
+            return `${num}${pred}`;
+          }) 
         : ["1S", "9B", "0S", "5B", "3S"]
     };
 
-    // 4. History save kora (isHistory: true diye mark kora)
+    // 4. History save kora (Eita crash korar chance kom kintu safe rakha bhalo)
     await predictionCollection.insertOne({
         period: response.period,
         prediction: response.prediction,
         confidence: response.confidence,
         resultNumber: response.resultNumber, 
-        size: response.prediction, // Compatibility-r jonno
         timestamp: new Date(),
         isHistory: true 
     });
@@ -67,8 +76,11 @@ async function run() {
     res.json(response);
 
   } catch (error) {
-    console.error("Backend Error:", error.message);
-    res.status(500).json({ error: "Sync Failed", details: error.message });
+    console.error("CRITICAL ERROR:", error.message);
+    res.status(500).json({ 
+      error: "Internal Server Error", 
+      details: error.message 
+    });
   }
 });
 
