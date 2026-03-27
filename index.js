@@ -14,87 +14,97 @@ const client = new MongoClient(uri, {
   serverApi: { version: ServerApiVersion.v1, strict: true, deprecationErrors: true }
 });
 
+let predictionCollection;
+
 async function run() {
   try {
+    // 1. Database Connection
+    await client.connect(); // Explicitly connect
     const predictionDB = client.db("prediction");
-    const predictionCollection = predictionDB.collection("prediction-logic");
+    predictionCollection = predictionDB.collection("prediction-logic");
+    console.log("✅ Connected to MongoDB: prediction-logic");
 
-    console.log("Connected to prediction-logic collection!");
+    // --- GET PREDICTION ---
+    app.get('/prediction', async (req, res) => {
+      try {
+        // Database theke 1ti random logic fetch
+        const randomDocs = await predictionCollection.aggregate([
+          { $match: { isHistory: { $ne: true } } }, // History documentation chara shudhu main logic gulo nibe
+          { $sample: { size: 1 } }
+        ]).toArray();
 
- app.get('/prediction', async (req, res) => {
-  try {
-    // 1. Database theke random data fetch kora
-    const randomDocs = await predictionCollection.aggregate([
-      { $sample: { size: 1 } }
-    ]).toArray();
+        if (!randomDocs || randomDocs.length === 0) {
+          return res.status(404).json({ error: "No logic data found" });
+        }
 
-    // Data check: Jodi database khali thake
-    if (!randomDocs || randomDocs.length === 0) {
-      console.error("Database is empty!");
-      return res.status(404).json({ error: "No data in prediction-logic collection" });
-    }
+        const selected = randomDocs[0];
 
-    const selected = randomDocs[0];
+        // Last 10 history updates
+        const history = await predictionCollection.find({ isHistory: true })
+          .sort({ timestamp: -1 })
+          .limit(10)
+          .toArray();
 
-    // 2. History fetch (Last 10 updates)
-    const history = await predictionCollection.find({ isHistory: true })
-      .sort({ timestamp: -1 })
-      .limit(10)
-      .toArray();
+        const resultNum = selected.number !== undefined ? selected.number.toString().padStart(2, '0') : "00";
+        const resultSize = (selected.size || selected.prediction || "Small").toUpperCase();
 
-    // 3. Response Structure (Strictly based on your data)
-    // selected.number jodi integer hoy tobe eita string-e convert hobe
-    const resultNum = selected.number !== undefined ? selected.number.toString().padStart(2, '0') : "00";
-    const resultSize = (selected.size || "Small").toUpperCase();
+        const response = {
+          prediction: resultSize, 
+          period: new Date().getTime().toString().slice(-8),
+          confidence: Math.floor(Math.random() * (98 - 82 + 1) + 82),
+          resultNumber: resultNum,
+          color: selected.color || "Green",
+          lastUpdates: history.length > 0 
+            ? history.map(h => `${h.resultNumber || "0"}${(h.prediction || h.size || "S").charAt(0).toUpperCase()}`) 
+            : ["1S", "9B", "0S", "5B", "3S"]
+        };
 
-    const response = {
-      prediction: resultSize, 
-      period: new Date().getTime().toString().slice(-8),
-      confidence: Math.floor(Math.random() * (98 - 82 + 1) + 82),
-      resultNumber: resultNum,
-      color: selected.color || "Green",
-      // History mapping fix: safely handle possible undefined values
-      lastUpdates: history.length > 0 
-        ? history.map(h => {
-            const num = h.resultNumber || "0";
-            const pred = (h.prediction || h.size || "S").charAt(0).toUpperCase();
-            return `${num}${pred}`;
-          }) 
-        : ["1S", "9B", "0S", "5B", "3S"]
-    };
+        // Auto-save history after generation
+        await predictionCollection.insertOne({
+            ...response,
+            timestamp: new Date(),
+            isHistory: true 
+        });
 
-    // 4. History save kora (Eita crash korar chance kom kintu safe rakha bhalo)
-    await predictionCollection.insertOne({
-        period: response.period,
-        prediction: response.prediction,
-        confidence: response.confidence,
-        resultNumber: response.resultNumber, 
-        timestamp: new Date(),
-        isHistory: true 
+        res.json(response);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
     });
 
-    res.json(response);
+    // --- POST NEW LOGIC (Admin Control) ---
+    app.post('/prediction', async (req, res) => {
+      try {
+        const { prediction, size, number, color, confidence, isHistory } = req.body;
 
-  } catch (error) {
-    console.error("CRITICAL ERROR:", error.message);
-    res.status(500).json({ 
-      error: "Internal Server Error", 
-      details: error.message 
+        const newEntry = {
+          prediction: (prediction || size || "BIG").toUpperCase(),
+          number: number !== undefined ? number : 0,
+          color: color || "Green",
+          confidence: confidence || 90,
+          timestamp: new Date(),
+          isHistory: isHistory || false // Admin jodi shudhu logic add kore tobe false, history hole true
+        };
+
+        const result = await predictionCollection.insertOne(newEntry);
+        res.status(201).json({ success: true, id: result.insertedId });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
     });
-  }
-});
 
-    app.get('/', (req, res) => res.send("RS ALGO Server Running..."));
+    app.get('/', (req, res) => res.send("RS ALGO Server is Active 🚀"));
 
   } catch (error) {
-    console.error("Startup Error:", error);
+    console.error("❌ MongoDB Connection Error:", error);
   }
 }
 
 run().catch(console.dir);
 
+// Local development er jonno listener
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(port, () => console.log(`Server on ${port}`));
+  app.listen(port, () => console.log(`🚀 Server running on http://localhost:${port}`));
 }
 
 module.exports = app;
